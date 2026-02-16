@@ -1,4 +1,5 @@
 add_library(chess_engine STATIC
+  attacks.cpp
   eval.cpp
   movegen.cpp
   position.cpp

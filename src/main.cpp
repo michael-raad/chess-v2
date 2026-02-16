@@ -1,6 +1,8 @@
 #include <iostream>
+#include "attacks.hpp"
 
 int main() {
-	std::cout << "chess-v2 placeholder" << std::endl;
-	return 0;
+  chess::init_attack_tables();
+  std::cout << "chess-v2 placeholder" << std::endl;
+  return 0;
 }
