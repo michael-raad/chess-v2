@@ -18,6 +18,16 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 enable_testing()
 
+# Fetch SFML for GUI
+include(FetchContent)
+FetchContent_Declare(SFML
+    GIT_REPOSITORY https://github.com/SFML/SFML.git
+    GIT_TAG 2.6.x
+    GIT_SHALLOW ON
+    EXCLUDE_FROM_ALL
+    SYSTEM)
+FetchContent_MakeAvailable(SFML)
+
 add_subdirectory(src)
 if(BUILD_TESTS)
 	add_subdirectory(tests)

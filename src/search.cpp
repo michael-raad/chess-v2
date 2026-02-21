@@ -112,6 +112,17 @@ bool is_checkmate(Position &pos, Color side) {
   return true; // no legal moves
 }
 
+bool is_stalemate(Position &pos, Color side) {
+  if (is_in_check(pos, side)) return false; // not stalemate if in check
+
+  auto legal_moves = get_legal_moves(pos);
+  return legal_moves.empty(); // stalemate if no legal moves and not in check
+}
+
+bool is_draw_by_50_move_rule(const Position &pos) {
+  return pos.halfmove_clock() >= 100; // 50 moves = 100 halfmoves
+}
+
 bool is_castling_legal(const Position &pos, int from, int to) {
   Color us = pos.side_to_move();
   
@@ -273,6 +284,28 @@ void perft_by_move(Position &pos, int depth) {
 
   std::cout << "----\t\t-----" << std::endl;
   std::cout << "Total\t\t" << total_nodes << std::endl;
+}
+
+std::vector<Move> get_legal_moves(Position &pos) {
+  std::vector<Move> legal_moves;
+  MoveGenerator movegen(pos);
+  
+  Color original_side = pos.side_to_move(); // Side making the move
+  auto pseudo_legal = movegen.generate_pseudo_legal();
+  for (const auto& m : pseudo_legal) {
+    // Try the move
+    auto info = pos.apply_move(m.from, m.to, m.promo);
+    if (!info) continue;
+    
+    // Check if our king is safe after the move
+    if (!is_in_check(pos, original_side)) {
+      legal_moves.push_back(m);
+    }
+    
+    pos.undo_move(*info);
+  }
+  
+  return legal_moves;
 }
 
 } // namespace chess

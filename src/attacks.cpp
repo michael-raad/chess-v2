@@ -7,6 +7,8 @@ namespace chess {
 U64 knight_attacks[64];
 U64 king_attacks[64];
 
+std::once_flag AttackTablesInitializer::init_flag_;
+
 void init_attack_tables() {
   // Initialize knight attacks
   for (int sq = 0; sq < 64; ++sq) {

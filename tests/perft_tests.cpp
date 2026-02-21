@@ -5,9 +5,11 @@
 
 using namespace chess;
 
-// Initialize attack tables before running tests
+// Initialize attack tables before running tests using RAII
 static struct Initializer {
-  Initializer() { init_attack_tables(); }
+  Initializer() { 
+    AttackTablesInitializer init;
+  }
 } initializer;
 
 // Test perft on initial position

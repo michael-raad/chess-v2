@@ -1,8 +1,10 @@
 #pragma once
 #include "position.hpp"
+#include "movegen.hpp"
 
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace chess {
 
@@ -63,7 +65,16 @@ bool is_in_check(const Position &pos, Color side);
 // Helper: check if a side is in checkmate
 bool is_checkmate(Position &pos, Color side);
 
+// Helper: check if a side is in stalemate (not in check, but no legal moves)
+bool is_stalemate(Position &pos, Color side);
+
+// Helper: check if the position is a draw by 50-move rule
+bool is_draw_by_50_move_rule(const Position &pos);
+
 // Helper: check if a castling move is legal (king doesn't move through check)
 bool is_castling_legal(const Position &pos, int from, int to);
+
+// Generate all legal moves (pseudo-legal moves that don't leave king in check)
+std::vector<Move> get_legal_moves(Position &pos);
 
 } // namespace chess

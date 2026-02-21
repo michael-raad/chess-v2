@@ -18,6 +18,11 @@ enum Piece : int {
   NO_PIECE = -1
 };
 
+enum class PlayerType { HUMAN, AI };
+
+inline Color piece_color(Piece p) { return p < 6 ? WHITE : BLACK; }
+inline PieceType piece_type(Piece p) { return PieceType(p % 6); }
+
 // Represents a chess position, including piece placement, side to move, castling rights, en passant square, and move counters.
 class Position {
 public:
@@ -36,6 +41,7 @@ public:
   Color side_to_move() const { return side_; }
   int en_passant_square() const { return ep_square_; } // -1 if none
   int castling_rights() const { return castling_; }    // bitmask: WK=1,WQ=2,BK=4,BQ=8
+  int halfmove_clock() const { return halfmove_; }    // halfmove clock for 50-move rule
 
   // query piece on square (0..63). Returns NO_PIECE if empty.
   int piece_on_square(int sq) const;
