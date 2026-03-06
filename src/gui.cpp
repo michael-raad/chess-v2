@@ -1,5 +1,6 @@
 #include "gui.hpp"
 #include <iostream>
+#include <algorithm>
 
 namespace chess {
 
@@ -20,7 +21,7 @@ GUI::GUI(PlayerType white_player, PlayerType black_player)
 }
 
 void GUI::run() {
-    sf::RenderWindow window(sf::VideoMode(1000, 900), "Chess");
+    sf::RenderWindow window(sf::VideoMode(window_width_, window_height_), "Chess");
     window.setFramerateLimit(60);
 
     while (window.isOpen()) {
@@ -37,6 +38,11 @@ void GUI::run() {
             }
         }
         
+        // Additional check: ensure we transition to GAME_OVER when status changes to any end state
+        if (state_ == GUIState::PLAYING && game_->get_status() != GameStatus::PLAYING) {
+            state_ = GUIState::GAME_OVER;
+        }
+        
         window.clear(sf::Color::White);
         
         if (state_ == GUIState::MENU) {
@@ -45,11 +51,15 @@ void GUI::run() {
             draw_board(window);
             draw_pieces(window);
             draw_game_status(window);
+        } else if (state_ == GUIState::PROMOTION) {
+            draw_board(window);
+            draw_pieces(window);
+            draw_promotion_dialog(window);
         } else if (state_ == GUIState::GAME_OVER) {
             draw_board(window);
             draw_pieces(window);
             draw_game_status(window);
-            draw_text(window, "Press SPACE to return to menu", 350, 820, 20, sf::Color::Black);
+            draw_text(window, "Press SPACE to return to menu", 480, 805, 20, sf::Color::Black);
         }
         
         window.display();
@@ -57,7 +67,10 @@ void GUI::run() {
 }
 
 void GUI::draw_menu(sf::RenderWindow& window) {
-    draw_text(window, "CHESS", 400, 50, 60, sf::Color::Black);
+    draw_text(window, "Chess", 5, 2, 20, sf::Color::Black, sf::Text::Style::Bold);
+    draw_text(window, "Game Setup", window_width_ / 2 - 160, 50, 50, sf::Color::Black, sf::Text::Style::Bold);
+
+    // draw_text(window, "CHESS", window_width_ / 2 - 100, 50, 60, sf::Color::Black);
     
     // FEN input
     draw_text(window, "FEN:", 50, 150, 20, sf::Color::Black);
@@ -82,16 +95,59 @@ void GUI::draw_menu(sf::RenderWindow& window) {
 
 void GUI::draw_board(sf::RenderWindow& window) {
     const int square_size = 100;
+    
+    // Collect valid destination squares if a piece is selected
+    std::vector<int> valid_destinations;
+    if (selected_square_) {
+        const auto& legal_moves = game_->get_legal_moves();
+        for (const auto& move : legal_moves) {
+            if (move.from == *selected_square_) {
+                valid_destinations.push_back(move.to);
+            }
+        }
+    }
+    
+    const auto& position = game_->get_position();
+    auto last_move_from = game_->get_last_move_from();
+    auto last_move_to = game_->get_last_move_to();
+    
     for (int rank = 0; rank < 8; ++rank) {
         for (int file = 0; file < 8; ++file) {
             sf::RectangleShape square(sf::Vector2f(square_size, square_size));
             square.setPosition(file * square_size, (7 - rank) * square_size);
-            square.setFillColor((rank + file) % 2 == 0 ? sf::Color(240, 217, 181) : sf::Color(181, 136, 99));
+            square.setFillColor((rank + file) % 2 == 0 ? sf::Color(181, 136, 99) : sf::Color(240, 217, 181));
             int sq = rank * 8 + file;
-            if (selected_square_ && *selected_square_ == sq) {
-                square.setFillColor(sf::Color::Yellow);
+            
+            // Highlight last move squares in pale yellow
+            if ((last_move_from && *last_move_from == sq) || (last_move_to && *last_move_to == sq)) {
+                square.setFillColor((rank + file) % 2 == 0 ? sf::Color(210, 200, 140) : sf::Color(220, 210, 160));
             }
+            
+            // Highlight selected square in green
+            if (selected_square_ && *selected_square_ == sq) {
+                square.setFillColor(sf::Color(107, 181, 99));
+            }
+             
             window.draw(square);
+
+            // Draw circle overlay for valid destination squares
+            if (std::find(valid_destinations.begin(), valid_destinations.end(), sq) != valid_destinations.end()) {
+                sf::CircleShape empty_highlight(square_size * 0.125f);
+                sf::CircleShape capture_highlight(square_size * 0.4f);
+                empty_highlight.setPosition(file * square_size + square_size / 2 - empty_highlight.getRadius(), (7 - rank) * square_size + square_size / 2 - empty_highlight.getRadius());
+                capture_highlight.setPosition(file * square_size + square_size / 2 - capture_highlight.getRadius(), (7 - rank) * square_size + square_size / 2 - capture_highlight.getRadius());
+                
+                // large circle if capturing, small circle otherwise
+                if (position.piece_on_square(sq) != NO_PIECE) {
+                    capture_highlight.setOutlineThickness(10.f);
+                    capture_highlight.setOutlineColor(sf::Color(107, 181, 99));
+                    capture_highlight.setFillColor(sf::Color::Transparent);
+                    window.draw(capture_highlight);
+                } else {
+                    empty_highlight.setFillColor(sf::Color(107, 181, 99));
+                    window.draw(empty_highlight);
+                }
+            }
         }
     }
 }
@@ -106,7 +162,7 @@ void GUI::draw_pieces(sf::RenderWindow& window) {
             sf::Sprite sprite(piece_textures_[piece_int]);
             
             // Scale sprite to fit in square (assuming textures are around 100x100)
-            sprite.setScale(0.95f, 0.95f);
+            sprite.setScale(0.80f, 0.80f);
             
             int file = sq % 8;
             int rank = sq / 8;
@@ -121,38 +177,39 @@ void GUI::draw_pieces(sf::RenderWindow& window) {
 }
 
 void GUI::draw_game_status(sf::RenderWindow& window) {
-    int y = 820;
+    int y = 805;
     GameStatus status = game_->get_status();
-    
-    std::string status_text;
+
+    std::string status_text = "Game Status: ";
     sf::Color color = sf::Color::Black;
     
     if (status == GameStatus::PLAYING) {
         Color turn = game_->get_position().side_to_move();
-        status_text = (turn == WHITE) ? "White to move" : "Black to move";
+        status_text += (turn == WHITE) ? "White to move" : "Black to move";
     } else if (status == GameStatus::WHITE_CHECKMATE) {
-        status_text = "White is checkmated - Black wins!";
+        status_text += "Checkmate - White wins!";
         color = sf::Color::Red;
     } else if (status == GameStatus::BLACK_CHECKMATE) {
-        status_text = "Black is checkmated - White wins!";
+        status_text += "Checkmate - Black wins!";
         color = sf::Color::Red;
     } else if (status == GameStatus::STALEMATE) {
-        status_text = "Stalemate - Draw!";
+        status_text += "Stalemate - Draw!";
         color = sf::Color::Blue;
     } else if (status == GameStatus::FIFTY_MOVE_DRAW) {
-        status_text = "50-move rule - Draw!";
+        status_text += "50-move rule - Draw!";
         color = sf::Color::Blue;
     }
     
-    draw_text(window, status_text, 100, y, 20, color);
+    draw_text(window, status_text, 10, y, 20, color);
 }
 
-void GUI::draw_text(sf::RenderWindow& window, const std::string& text, int x, int y, int size, sf::Color color) {
+void GUI::draw_text(sf::RenderWindow& window, const std::string& text, int x, int y, int size, sf::Color color, sf::Text::Style style) {
     sf::Text sf_text;
     sf_text.setFont(font_);
     sf_text.setString(text);
     sf_text.setCharacterSize(size);
     sf_text.setFillColor(color);
+    sf_text.setStyle(style);
     sf_text.setPosition(x, y);
     window.draw(sf_text);
 }
@@ -178,10 +235,48 @@ void GUI::handle_events(sf::RenderWindow& window) {
                         selected_square_ = sq;
                     }
                 } else {
-                    if (game_->try_move(*selected_square_, sq)) {
+                    // Check if this is a promotion move
+                    if (game_->is_promotion_move(*selected_square_, sq)) {
+                        // Enter promotion state and wait for piece selection
+                        promotion_from_ = *selected_square_;
+                        promotion_to_ = sq;
+                        selected_square_ = std::nullopt;
+                        state_ = GUIState::PROMOTION;
+                    } else {
+                        // Regular move
+                        if (game_->try_move(*selected_square_, sq)) {
+                            // Move succeeded
+                        }
+                        selected_square_ = std::nullopt;
+                        
+                        // Check if game ended
+                        if (game_->get_status() != GameStatus::PLAYING) {
+                            state_ = GUIState::GAME_OVER;
+                        }
+                    }
+                }
+            }
+        } else if (state_ == GUIState::PROMOTION) {
+            if (event.type == sf::Event::KeyPressed) {
+                int promo = 0;
+                if (event.key.code == sf::Keyboard::Q) {
+                    promo = QUEEN;
+                } else if (event.key.code == sf::Keyboard::R) {
+                    promo = ROOK;
+                } else if (event.key.code == sf::Keyboard::B) {
+                    promo = BISHOP;
+                } else if (event.key.code == sf::Keyboard::N) {
+                    promo = KNIGHT;
+                }
+                
+                if (promo != 0 && promotion_from_ && promotion_to_) {
+                    // Complete the promotion move
+                    if (game_->try_move(*promotion_from_, *promotion_to_, promo)) {
                         // Move succeeded
                     }
-                    selected_square_ = std::nullopt;
+                    promotion_from_ = std::nullopt;
+                    promotion_to_ = std::nullopt;
+                    state_ = GUIState::PLAYING;
                     
                     // Check if game ended
                     if (game_->get_status() != GameStatus::PLAYING) {
@@ -226,6 +321,44 @@ void GUI::handle_menu_input(const sf::Event& event) {
             selected_player_black_ = 1 - selected_player_black_;
         }
     }
+}
+
+void GUI::draw_promotion_dialog(sf::RenderWindow& window) {
+    // Draw semi-transparent overlay
+    sf::RectangleShape overlay(sf::Vector2f(window_width_, window_height_));
+    overlay.setFillColor(sf::Color(0, 0, 0, 200));
+    window.draw(overlay);
+    
+    // Draw dialog box
+    sf::RectangleShape dialog(sf::Vector2f(400, 300));
+    dialog.setPosition(200, 300);
+    dialog.setFillColor(sf::Color::White);
+    window.draw(dialog);
+    
+    // Draw dialog border
+    sf::RectangleShape border(sf::Vector2f(400, 300));
+    border.setPosition(200, 300);
+    border.setFillColor(sf::Color::Transparent);
+    border.setOutlineColor(sf::Color::Black);
+    border.setOutlineThickness(3);
+    window.draw(border);
+    
+    // Draw title
+    draw_text(window, "Promote to:", 250, 320, 24, sf::Color::Black);
+    
+    // Draw promotion options
+    draw_text(window, "Q - Queen", 250, 370, 20, sf::Color::Black);
+    
+    // Rook option
+    draw_text(window, "R - Rook", 250, 410, 20, sf::Color::Black);
+    
+    // Bishop option
+    draw_text(window, "B - Bishop", 250, 450, 20, sf::Color::Black);
+    
+    // Knight option
+    draw_text(window, "N - Knight", 250, 490, 20, sf::Color::Black);
+    
+    draw_text(window, "Press a key to select", 240, 540, 16, sf::Color(100, 100, 100));
 }
 
 bool GUI::load_piece_textures() {

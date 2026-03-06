@@ -5,6 +5,7 @@ add_library(chess_engine STATIC
   gui.cpp
   movegen.cpp
   position.cpp
+  random_engine.cpp
   search.cpp
   uci.cpp
   zobrist.cpp

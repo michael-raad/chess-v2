@@ -1,16 +1,37 @@
 #include "game.hpp"
+#include "random_engine.hpp"
 #include <random>
 #include <vector>
 
 namespace chess {
 
-Game::Game(PlayerType white_player, PlayerType black_player) : position_(), movegen_(position_), selected_square_(std::nullopt), attack_tables_init_(), status_(GameStatus::PLAYING) {
+Game::Game(PlayerType white_player, PlayerType black_player) : position_(), movegen_(position_), selected_square_(std::nullopt), attack_tables_init_(), status_(GameStatus::PLAYING), white_engine_(nullptr), black_engine_(nullptr) {
     players_[0] = white_player;
     players_[1] = black_player;
+    init_default_engines();
     update_status();
+    update_legal_moves();
     if (players_[position_.side_to_move()] == PlayerType::AI) {
         make_ai_move();
     }
+}
+
+Game::Game(std::unique_ptr<Engine> white_engine, std::unique_ptr<Engine> black_engine,
+           PlayerType white_player, PlayerType black_player) 
+    : position_(), movegen_(position_), selected_square_(std::nullopt), attack_tables_init_(), 
+      status_(GameStatus::PLAYING), white_engine_(std::move(white_engine)), black_engine_(std::move(black_engine)) {
+    players_[0] = white_player;
+    players_[1] = black_player;
+    update_status();
+    update_legal_moves();
+    if (players_[position_.side_to_move()] == PlayerType::AI) {
+        make_ai_move();
+    }
+}
+
+void Game::init_default_engines() {
+    white_engine_ = std::make_unique<RandomEngine>();
+    black_engine_ = std::make_unique<RandomEngine>();
 }
 
 bool Game::set_fen(const std::string& fen) {
@@ -18,29 +39,44 @@ bool Game::set_fen(const std::string& fen) {
         return false;
     }
     selected_square_ = std::nullopt;
+    last_move_from_ = std::nullopt;
+    last_move_to_ = std::nullopt;
     update_status();
+    update_legal_moves();
     if (players_[position_.side_to_move()] == PlayerType::AI) {
         make_ai_move();
     }
     return true;
 }
 
-bool Game::try_move(int from, int to) {
+bool Game::try_move(int from, int to, int promo) {
     if (status_ != GameStatus::PLAYING) return false;
     if (get_current_player_type() != PlayerType::HUMAN) return false;
 
-    auto legal_moves = get_legal_moves(position_);
-    
-    for (const auto& m : legal_moves) {
-        if (m.from == from && m.to == to) {
+    // Check if move is in cached legal moves
+    for (const auto& m : legal_moves_) {
+        if (m.from == from && m.to == to && (promo == 0 || m.promo == promo)) {
             // Move is legal, apply it
             auto info = position_.apply_move(m.from, m.to, m.promo);
             if (!info) return false;
             
+            last_move_from_ = from;
+            last_move_to_ = to;
             update_status();
+            update_legal_moves();
             if (status_ == GameStatus::PLAYING && players_[position_.side_to_move()] == PlayerType::AI) {
                 make_ai_move();
             }
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Game::is_promotion_move(int from, int to) const {
+    // Check if this move is a pawn promotion
+    for (const auto& m : legal_moves_) {
+        if (m.from == from && m.to == to && m.promo != 0) {
             return true;
         }
     }
@@ -51,17 +87,32 @@ void Game::make_ai_move() {
     if (status_ != GameStatus::PLAYING) return;
     if (get_current_player_type() != PlayerType::AI) return;
 
-    auto legal_moves = get_legal_moves(position_);
-    if (legal_moves.empty()) return;
+    // Get the appropriate engine for current player
+    Engine* current_engine = (position_.side_to_move() == WHITE) ? white_engine_.get() : black_engine_.get();
     
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, legal_moves.size() - 1);
-    Move ai_move = legal_moves[dis(gen)];
+    if (!current_engine) return;
     
-    auto info = position_.apply_move(ai_move.from, ai_move.to, ai_move.promo);
+    Move ai_move = current_engine->get_best_move(position_);
+    
+    // Verify the move is legal
+    bool move_found = false;
+    int promo = 0;
+    for (const auto& m : legal_moves_) {
+        if (m.from == ai_move.from && m.to == ai_move.to) {
+            move_found = true;
+            promo = m.promo;
+            break;
+        }
+    }
+    
+    if (!move_found) return;
+    
+    auto info = position_.apply_move(ai_move.from, ai_move.to, promo);
     if (info) {
+        last_move_from_ = ai_move.from;
+        last_move_to_ = ai_move.to;
         update_status();
+        update_legal_moves();
         if (status_ == GameStatus::PLAYING && players_[position_.side_to_move()] == PlayerType::AI) {
             make_ai_move(); // Recurse for AI vs AI
         }
@@ -80,6 +131,10 @@ void Game::update_status() {
     } else {
         status_ = GameStatus::PLAYING;
     }
+}
+
+void Game::update_legal_moves() {
+    legal_moves_ = chess::get_legal_moves(position_);
 }
 
 }
