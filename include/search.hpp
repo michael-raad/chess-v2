@@ -16,8 +16,6 @@ struct PerftStats {
   uint64_t castles = 0;      // castling moves
   uint64_t promotions = 0;   // pawn promotions (including captures)
   uint64_t checks = 0;       // positions leaving opponent in check
-  uint64_t discovery_checks = 0;  // moves giving discovered check
-  uint64_t double_checks = 0;     // moves giving double check
   uint64_t checkmates = 0;   // positions that are checkmate
 
   PerftStats &operator+=(const PerftStats &other) {
@@ -27,8 +25,6 @@ struct PerftStats {
     castles += other.castles;
     promotions += other.promotions;
     checks += other.checks;
-    discovery_checks += other.discovery_checks;
-    double_checks += other.double_checks;
     checkmates += other.checkmates;
     return *this;
   }
@@ -45,8 +41,6 @@ struct PerftStats {
     std::cout << "  Castles:       " << castles << std::endl;
     std::cout << "  Promotions:    " << promotions << std::endl;
     std::cout << "  Checks:        " << checks << std::endl;
-    std::cout << "  Disc Checks:   " << discovery_checks << std::endl;
-    std::cout << "  Double Checks: " << double_checks << std::endl;
     std::cout << "  Checkmates:    " << checkmates << std::endl;
   }
 };

@@ -1,0 +1,8 @@
+#pragma once
+
+#include <string>
+
+namespace chess {
+    // Path to the images directory (configured at build time)
+    static const std::string IMAGES_DIR = "@PROJECT_SOURCE_DIR@/images/";
+}

@@ -1,5 +1,6 @@
 #include "game.hpp"
 #include "random_engine.hpp"
+#include "choppedfish_engine.hpp"
 #include <random>
 #include <vector>
 
@@ -11,9 +12,7 @@ Game::Game(PlayerType white_player, PlayerType black_player) : position_(), move
     init_default_engines();
     update_status();
     update_legal_moves();
-    if (players_[position_.side_to_move()] == PlayerType::AI) {
-        make_ai_move();
-    }
+    // Don't make AI move here - let GUI render board first
 }
 
 Game::Game(std::unique_ptr<Engine> white_engine, std::unique_ptr<Engine> black_engine,
@@ -24,14 +23,12 @@ Game::Game(std::unique_ptr<Engine> white_engine, std::unique_ptr<Engine> black_e
     players_[1] = black_player;
     update_status();
     update_legal_moves();
-    if (players_[position_.side_to_move()] == PlayerType::AI) {
-        make_ai_move();
-    }
+    // Don't make AI move here - let GUI render board first
 }
 
 void Game::init_default_engines() {
-    white_engine_ = std::make_unique<RandomEngine>();
-    black_engine_ = std::make_unique<RandomEngine>();
+    white_engine_ = std::make_unique<ChoppedfishEngine>(4);
+    black_engine_ = std::make_unique<ChoppedfishEngine>(4);
 }
 
 bool Game::set_fen(const std::string& fen) {
@@ -43,9 +40,7 @@ bool Game::set_fen(const std::string& fen) {
     last_move_to_ = std::nullopt;
     update_status();
     update_legal_moves();
-    if (players_[position_.side_to_move()] == PlayerType::AI) {
-        make_ai_move();
-    }
+    // Don't make AI move here - let GUI render board first
     return true;
 }
 
@@ -64,9 +59,7 @@ bool Game::try_move(int from, int to, int promo) {
             last_move_to_ = to;
             update_status();
             update_legal_moves();
-            if (status_ == GameStatus::PLAYING && players_[position_.side_to_move()] == PlayerType::AI) {
-                make_ai_move();
-            }
+            // Don't call make_ai_move here - let GUI loop handle it for proper rendering
             return true;
         }
     }
@@ -94,28 +87,25 @@ void Game::make_ai_move() {
     
     Move ai_move = current_engine->get_best_move(position_);
     
-    // Verify the move is legal
+    // Verify the move is legal (check from, to, AND promo for promotion moves)
     bool move_found = false;
-    int promo = 0;
     for (const auto& m : legal_moves_) {
-        if (m.from == ai_move.from && m.to == ai_move.to) {
+        if (m.from == ai_move.from && m.to == ai_move.to && m.promo == ai_move.promo) {
             move_found = true;
-            promo = m.promo;
             break;
         }
     }
     
     if (!move_found) return;
     
-    auto info = position_.apply_move(ai_move.from, ai_move.to, promo);
+    auto info = position_.apply_move(ai_move.from, ai_move.to, ai_move.promo);
     if (info) {
         last_move_from_ = ai_move.from;
         last_move_to_ = ai_move.to;
         update_status();
         update_legal_moves();
-        if (status_ == GameStatus::PLAYING && players_[position_.side_to_move()] == PlayerType::AI) {
-            make_ai_move(); // Recurse for AI vs AI
-        }
+        // Note: GUI main loop will call make_ai_move() again if next player is AI
+        // This allows rendering between moves instead of computing the entire game tree recursively
     }
 }
 

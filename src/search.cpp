@@ -176,6 +176,8 @@ PerftStats perft(Position &pos, int depth) {
     auto undo_info = pos.apply_move(m.from, m.to, m.promo);
     if (!undo_info) continue;
 
+    bool is_applied = true;  // Track if position has move applied
+    
     // Check legality: king must not be in check after the move
     bool legal = !is_in_check(pos, static_cast<Color>(pos.side_to_move() ^ 1));
     
@@ -183,41 +185,46 @@ PerftStats perft(Position &pos, int depth) {
     if (legal && std::abs(m.to - m.from) == 2) {
       int piece = pos.piece_on_square(m.to);
       if (piece == WK || piece == BK) {
-        // Undo to check castling legality before applying again
+        // Undo to check castling legality
         pos.undo_move(*undo_info);
+        is_applied = false;
         legal = is_castling_legal(pos, m.from, m.to);
-        if (!legal) continue;
-        // Re-apply the move
-        undo_info = pos.apply_move(m.from, m.to, m.promo);
-        if (!undo_info) continue;
+        if (legal) {
+          // Re-apply the move if it's legal
+          undo_info = pos.apply_move(m.from, m.to, m.promo);
+          is_applied = !!undo_info;
+          legal = is_applied;
+        }
       }
     }
     
     if (!legal) {
-      pos.undo_move(*undo_info);
+      if (is_applied) pos.undo_move(*undo_info);
       continue;
     }
 
-    // Track stats for THIS move (always, regardless of depth)
-    if (undo_info->captured_piece != NO_PIECE || undo_info->was_ep_capture) {
-      stats.captures++;
-    }
-    if (undo_info->was_ep_capture) {
-      stats.en_passants++;
-    }
-    if (m.promo > 0) {
-      stats.promotions++;
-    }
-    // Castling: king moves 2 squares
-    int piece = pos.piece_on_square(m.to);
-    if ((piece == WK || piece == BK) && std::abs(m.to - m.from) == 2) {
-      stats.castles++;
-    }
-    // Check/checkmate detection
-    if (is_in_check(pos, pos.side_to_move())) {
-      stats.checks++;
-      if (is_checkmate(pos, pos.side_to_move())) {
-        stats.checkmates++;
+    // Only count stats at leaf nodes (when depth == 1, recurse goes to depth 0)
+    if (depth == 1) {
+      if (undo_info->captured_piece != NO_PIECE || undo_info->was_ep_capture) {
+        stats.captures++;
+      }
+      if (undo_info->was_ep_capture) {
+        stats.en_passants++;
+      }
+      if (m.promo > 0) {
+        stats.promotions++;
+      }
+      // Castling: king moves 2 squares
+      int piece = pos.piece_on_square(m.to);
+      if ((piece == WK || piece == BK) && std::abs(m.to - m.from) == 2) {
+        stats.castles++;
+      }
+      // Check/checkmate detection
+      if (is_in_check(pos, pos.side_to_move())) {
+        stats.checks++;
+        if (is_checkmate(pos, pos.side_to_move())) {
+          stats.checkmates++;
+        }
       }
     }
 
@@ -246,6 +253,8 @@ void perft_by_move(Position &pos, int depth) {
     auto undo_info = pos.apply_move(m.from, m.to, m.promo);
     if (!undo_info) continue;
 
+    bool is_applied = true;
+
     // Check legality: king must not be in check after the move
     bool legal = !is_in_check(pos, static_cast<Color>(pos.side_to_move() ^ 1));
     
@@ -254,15 +263,18 @@ void perft_by_move(Position &pos, int depth) {
       int piece = pos.piece_on_square(m.to);
       if (piece == WK || piece == BK) {
         pos.undo_move(*undo_info);
+        is_applied = false;
         legal = is_castling_legal(pos, m.from, m.to);
-        if (!legal) continue;
-        undo_info = pos.apply_move(m.from, m.to, m.promo);
-        if (!undo_info) continue;
+        if (legal) {
+          undo_info = pos.apply_move(m.from, m.to, m.promo);
+          is_applied = !!undo_info;
+          legal = is_applied;
+        }
       }
     }
     
     if (!legal) {
-      pos.undo_move(*undo_info);
+      if (is_applied) pos.undo_move(*undo_info);
       continue;
     }
 
@@ -290,18 +302,40 @@ std::vector<Move> get_legal_moves(Position &pos) {
   std::vector<Move> legal_moves;
   MoveGenerator movegen(pos);
   
-  Color original_side = pos.side_to_move(); // Side making the move
+  Color original_side = pos.side_to_move();
   auto pseudo_legal = movegen.generate_pseudo_legal();
   for (const auto& m : pseudo_legal) {
-    // Try the move
     auto info = pos.apply_move(m.from, m.to, m.promo);
     if (!info) continue;
     
+    bool is_applied = true;  // Track if position has move applied
+    
     // Check if our king is safe after the move
-    if (!is_in_check(pos, original_side)) {
-      legal_moves.push_back(m);
+    bool legal = !is_in_check(pos, original_side);
+    
+    // Additional check for castling: verify intermediate squares aren't under attack
+    if (legal && std::abs(m.to - m.from) == 2) {
+      int piece = pos.piece_on_square(m.to);
+      if (piece == WK || piece == BK) {
+        // Undo to check castling legality
+        pos.undo_move(*info);
+        is_applied = false;
+        legal = is_castling_legal(pos, m.from, m.to);
+        if (legal) {
+          // Re-apply the move if it's legal
+          info = pos.apply_move(m.from, m.to, m.promo);
+          is_applied = !!info;
+          legal = is_applied;
+        }
+      }
     }
     
+    if (!legal) {
+      if (is_applied) pos.undo_move(*info);
+      continue;
+    }
+    
+    legal_moves.push_back(m);
     pos.undo_move(*info);
   }
   

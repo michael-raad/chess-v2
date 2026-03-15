@@ -1,5 +1,6 @@
 add_library(chess_engine STATIC
   attacks.cpp
+  choppedfish_engine.cpp
   eval.cpp
   game.cpp
   gui.cpp
@@ -13,6 +14,7 @@ add_library(chess_engine STATIC
 
 target_include_directories(chess_engine PUBLIC
   ${PROJECT_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/include
 )
 
 # Position independent for flexibility

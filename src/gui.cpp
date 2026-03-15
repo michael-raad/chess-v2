@@ -1,4 +1,5 @@
 #include "gui.hpp"
+#include "config.hpp"
 #include <iostream>
 #include <algorithm>
 
@@ -8,7 +9,8 @@ GUI::GUI(PlayerType white_player, PlayerType black_player)
     : game_(std::make_unique<Game>(white_player, black_player)),
       selected_square_(std::nullopt),
       state_(GUIState::MENU),
-      fen_input_("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+      // fen_input_("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+      fen_input_("r5kr/1R4p1/1p1qp1B1/p2p2pQ/7P/P3p3/1PP5/2K5 w - - 0 28"),
       selected_player_white_(white_player == PlayerType::HUMAN ? 0 : 1),
       selected_player_black_(black_player == PlayerType::HUMAN ? 0 : 1)
 {
@@ -26,22 +28,6 @@ void GUI::run() {
 
     while (window.isOpen()) {
         handle_events(window);
-        
-        // Handle AI moves
-        if (state_ == GUIState::PLAYING && game_->get_status() == GameStatus::PLAYING) {
-            if (game_->get_current_player_type() == PlayerType::AI) {
-                game_->make_ai_move();
-                // Check if game ended after AI move
-                if (game_->get_status() != GameStatus::PLAYING) {
-                    state_ = GUIState::GAME_OVER;
-                }
-            }
-        }
-        
-        // Additional check: ensure we transition to GAME_OVER when status changes to any end state
-        if (state_ == GUIState::PLAYING && game_->get_status() != GameStatus::PLAYING) {
-            state_ = GUIState::GAME_OVER;
-        }
         
         window.clear(sf::Color::White);
         
@@ -63,6 +49,22 @@ void GUI::run() {
         }
         
         window.display();
+        
+        // Handle AI moves AFTER rendering so human move displays before AI computes
+        if (state_ == GUIState::PLAYING && game_->get_status() == GameStatus::PLAYING) {
+            if (game_->get_current_player_type() == PlayerType::AI) {
+                game_->make_ai_move();
+                // Check if game ended after AI move
+                if (game_->get_status() != GameStatus::PLAYING) {
+                    state_ = GUIState::GAME_OVER;
+                }
+            }
+        }
+        
+        // Additional check: ensure we transition to GAME_OVER when status changes to any end state
+        if (state_ == GUIState::PLAYING && game_->get_status() != GameStatus::PLAYING) {
+            state_ = GUIState::GAME_OVER;
+        }
     }
 }
 
@@ -377,9 +379,10 @@ bool GUI::load_piece_textures() {
         "black-queen.png",
         "black-king.png"
     };
-    
+   
+    // Load piece textures from images directory (configured at build time)
     for (int i = 0; i < 12; ++i) {
-        std::string path = "images/" + filenames[i];
+        std::string path = IMAGES_DIR + filenames[i];
         if (!piece_textures_[i].loadFromFile(path)) {
             std::cerr << "ERROR: Failed to load " << path << "\n";
             return false;
