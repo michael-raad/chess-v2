@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace chess {
 
@@ -64,6 +65,10 @@ bool is_stalemate(Position &pos, Color side);
 
 // Helper: check if the position is a draw by 50-move rule
 bool is_draw_by_50_move_rule(const Position &pos);
+
+// Helper: check if the position is a draw by threefold repetition
+// position_history: map of position hash -> count occurrences
+bool is_threefold_repetition(const std::unordered_map<uint64_t, int>& position_history);
 
 // Helper: check if a castling move is legal (king doesn't move through check)
 bool is_castling_legal(const Position &pos, int from, int to);

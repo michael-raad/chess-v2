@@ -26,7 +26,7 @@ public:
   std::vector<Move> generate_pseudo_legal();
 
   // Generate only capture moves (pseudo-legal).
-  std::vector<Move> generate_captures();
+  // std::vector<Move> generate_captures();
 
 private:
   const Position &pos_;

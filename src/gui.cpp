@@ -7,10 +7,12 @@ namespace chess {
 
 GUI::GUI(PlayerType white_player, PlayerType black_player) 
     : game_(std::make_unique<Game>(white_player, black_player)),
+      white_engine_(std::make_unique<UIClient>(WHITE_ENGINE_BIN_PATH)),
+      black_engine_(std::make_unique<UIClient>(BLACK_ENGINE_BIN_PATH)),
       selected_square_(std::nullopt),
       state_(GUIState::MENU),
-      // fen_input_("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
-      fen_input_("r5kr/1R4p1/1p1qp1B1/p2p2pQ/7P/P3p3/1PP5/2K5 w - - 0 28"),
+      fen_input_("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+      // fen_input_("r1bqk1nr/pppp4/5p2/1BQ3pp/4P3/2N5/PPP2PPP/R1B2RK1 w kq h6 0 10"),
       selected_player_white_(white_player == PlayerType::HUMAN ? 0 : 1),
       selected_player_black_(black_player == PlayerType::HUMAN ? 0 : 1)
 {
@@ -19,6 +21,17 @@ GUI::GUI(PlayerType white_player, PlayerType black_player)
     }
     if (!load_piece_textures()) {
         std::cerr << "ERROR: Failed to load piece textures\n";
+    }
+    
+    // Initialize UCI engine connections
+    bool white_ok = white_engine_->initialize();
+    bool black_ok = black_engine_->initialize();
+    
+    if (!white_ok || !black_ok) {
+        std::cerr << "ERROR: Failed to initialize one or both UCI engines\n";
+        if (!white_ok) std::cerr << "  White engine failed\n";
+        if (!black_ok) std::cerr << "  Black engine failed\n";
+        // Continue anyway - will fall back to embedded engines if needed
     }
 }
 
@@ -53,7 +66,37 @@ void GUI::run() {
         // Handle AI moves AFTER rendering so human move displays before AI computes
         if (state_ == GUIState::PLAYING && game_->get_status() == GameStatus::PLAYING) {
             if (game_->get_current_player_type() == PlayerType::AI) {
-                game_->make_ai_move();
+                // Choose the appropriate engine based on whose turn it is
+                UIClient* current_engine = (game_->get_position().side_to_move() == Color::WHITE) 
+                    ? white_engine_.get() 
+                    : black_engine_.get();
+                
+                // Use UIClient to get best move from engine
+                if (current_engine && current_engine->is_alive()) {
+                    Color side = game_->get_position().side_to_move();
+                    std::cerr << "DEBUG: Requesting move from " << (side == Color::WHITE ? "white" : "black") << " engine..." << std::endl;
+                    
+                    // Send position to engine (FEN + empty move list)
+                    current_engine->set_position(game_->get_position().get_fen());
+                    
+                    // Get best move from engine
+                    auto best_move_eval = current_engine->get_best_move(4);  // depth 4 for responsive GUI
+                    
+                    if (best_move_eval) {
+                        std::cerr << "DEBUG: Engine returned move " << best_move_eval->move.from << "->" << best_move_eval->move.to << std::endl;
+                        
+                        // Apply the move
+                        bool moved = game_->apply_move(best_move_eval->move.from, best_move_eval->move.to, best_move_eval->move.promo);
+                        if (!moved) {
+                            std::cerr << "ERROR: Failed to apply move from engine!" << std::endl;
+                        }
+                    } else {
+                        std::cerr << "ERROR: Engine returned no move" << std::endl;
+                    }
+                } else {
+                    std::cerr << "ERROR: Engine not alive" << std::endl;
+                }
+                
                 // Check if game ended after AI move
                 if (game_->get_status() != GameStatus::PLAYING) {
                     state_ = GUIState::GAME_OVER;
@@ -200,6 +243,11 @@ void GUI::draw_game_status(sf::RenderWindow& window) {
     } else if (status == GameStatus::FIFTY_MOVE_DRAW) {
         status_text += "50-move rule - Draw!";
         color = sf::Color::Blue;
+    } else if (status == GameStatus::THREEFOLD_REPETITION_DRAW) {
+        status_text += "Threefold repetition - Draw!";
+        color = sf::Color::Blue;
+    } else {
+        status_text += "Unknown status";
     }
     
     draw_text(window, status_text, 10, y, 20, color);
@@ -257,6 +305,30 @@ void GUI::handle_events(sf::RenderWindow& window) {
                         }
                     }
                 }
+            } else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::H) {
+                // Evaluate position on demand and display score in console
+                // (This is a hidden feature for testing the evaluation function)
+                if (game_->get_current_player_type() == PlayerType::HUMAN) {
+                    int score = game_->evaluate_position();
+                    std::cout << "Evaluation score from perspective to move: " << score << std::endl;
+                } else {
+                    std::cout << "H key only works during human's turn" << std::endl;
+                }
+            } else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::N) {
+                // Get best move and score suggestion from evaluation engine
+                // (This is a hint feature for debugging and board analysis)
+                if (game_->get_current_player_type() == PlayerType::HUMAN) {
+                    MoveEvaluation eval = game_->get_best_move_suggestion();
+                    std::cout << "Best move suggestion: " 
+                              << char('a' + (eval.move.from % 8)) << (1 + eval.move.from / 8) << "-"
+                              << char('a' + (eval.move.to % 8)) << (1 + eval.move.to / 8);
+                    if (eval.move.promo) {
+                        std::cout << " (promo to " << eval.move.promo << ")";
+                    }
+                    std::cout << ", Score: " << eval.score << std::endl;
+                } else {
+                    std::cout << "N key only works during human's turn" << std::endl;
+                }
             }
         } else if (state_ == GUIState::PROMOTION) {
             if (event.type == sf::Event::KeyPressed) {
@@ -312,6 +384,18 @@ void GUI::handle_menu_input(const sf::Event& event) {
                 game_->set_fen(fen_input_);
             }
             selected_square_ = std::nullopt;
+            
+            // Reinitialize UCI engines for new game
+            white_engine_ = std::make_unique<UIClient>(WHITE_ENGINE_BIN_PATH);
+            black_engine_ = std::make_unique<UIClient>(BLACK_ENGINE_BIN_PATH);
+            
+            bool white_ok = white_engine_->initialize();
+            bool black_ok = black_engine_->initialize();
+            
+            if (!white_ok || !black_ok) {
+                std::cerr << "ERROR: Failed to initialize one or both UCI engines\n";
+            }
+            
             state_ = GUIState::PLAYING;
         } else if (event.text.unicode < 128 && event.text.unicode != 'z' && event.text.unicode != 'Z' && event.text.unicode != 'x' && event.text.unicode != 'X') { // printable ASCII (excluding Z/X toggles)
             fen_input_ += static_cast<char>(event.text.unicode);

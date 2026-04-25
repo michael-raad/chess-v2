@@ -1,14 +1,14 @@
 add_library(chess_engine STATIC
   attacks.cpp
   choppedfish_engine.cpp
-  eval.cpp
+  experimental_engine.cpp
   game.cpp
   gui.cpp
   movegen.cpp
   position.cpp
   random_engine.cpp
   search.cpp
-  uci.cpp
+  uci_client.cpp
   zobrist.cpp
 )
 
@@ -29,6 +29,20 @@ target_compile_options(chess_engine PRIVATE
   $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-Wall;-Wextra;-Wpedantic>
 )
 
-# Executable
+# Executable - GUI version
 add_executable(chess main.cpp)
 target_link_libraries(chess PRIVATE chess_engine)
+
+# Executable - UCI White (ExperimentalEngine)
+add_executable(chess_uci_white main_uci.cpp uci.cpp)
+target_link_libraries(chess_uci_white PRIVATE chess_engine)
+target_compile_definitions(chess_uci_white PRIVATE
+  UCI_ENGINE_TYPE=1
+)
+
+# Executable - UCI Black (ChoppedfishEngine)
+add_executable(chess_uci_black main_uci.cpp uci.cpp)
+target_link_libraries(chess_uci_black PRIVATE chess_engine)
+target_compile_definitions(chess_uci_black PRIVATE
+  UCI_ENGINE_TYPE=2
+)

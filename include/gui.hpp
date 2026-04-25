@@ -6,6 +6,7 @@
 #include <memory>
 #include <array>
 #include "game.hpp"
+#include "uci_client.hpp"
 
 namespace chess {
 
@@ -37,6 +38,8 @@ private:
     int window_height_ = 835;
     std::array<sf::Texture, 12> piece_textures_;  // WP, WN, WB, WR, WQ, WK, BP, BN, BB, BR, BQ, BK
     std::unique_ptr<Game> game_;
+    std::unique_ptr<UIClient> white_engine_;  // External UCI engine for white AI moves
+    std::unique_ptr<UIClient> black_engine_;  // External UCI engine for black AI moves
     std::optional<int> selected_square_;
     GUIState state_;
     std::string fen_input_;

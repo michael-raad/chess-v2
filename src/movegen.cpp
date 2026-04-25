@@ -18,26 +18,26 @@ std::vector<Move> MoveGenerator::generate_pseudo_legal() {
   return moves;
 }
 
-std::vector<Move> MoveGenerator::generate_captures() {
-  std::vector<Move> moves;
-  moves.reserve(128);
+// std::vector<Move> MoveGenerator::generate_captures() {
+//   std::vector<Move> moves;
+//   moves.reserve(128);
 
-  add_pawn_moves(moves);
-  add_knight_moves(moves);
-  add_bishop_moves(moves);
-  add_rook_moves(moves);
-  add_queen_moves(moves);
-  add_king_moves(moves);
+//   add_pawn_moves(moves);
+//   add_knight_moves(moves);
+//   add_bishop_moves(moves);
+//   add_rook_moves(moves);
+//   add_queen_moves(moves);
+//   add_king_moves(moves);
 
-  // Filter to captures only
-  std::vector<Move> captures;
-  for (const auto &m : moves) {
-    if (is_capture(m.from, m.to)) {
-      captures.push_back(m);
-    }
-  }
-  return captures;
-}
+//   // Filter to captures only
+//   std::vector<Move> captures;
+//   for (const auto &m : moves) {
+//     if (is_capture(m.from, m.to)) {
+//       captures.push_back(m);
+//     }
+//   }
+//   return captures;
+// }
 
 void MoveGenerator::add_pawn_moves(std::vector<Move> &moves) {
   Color us = pos_.side_to_move();
@@ -88,12 +88,14 @@ void MoveGenerator::add_pawn_moves(std::vector<Move> &moves) {
         int f1 = from % 8, f2 = cap_sq % 8;
         if ((delta == forward - 1 && f2 == f1 - 1) || (delta == forward + 1 && f2 == f1 + 1)) {
           if ((cap_sq / 8) == (rank_promo / 8)) {
-            moves.emplace_back(from, cap_sq, 1);
-            moves.emplace_back(from, cap_sq, 2);
-            moves.emplace_back(from, cap_sq, 3);
-            moves.emplace_back(from, cap_sq, 4);
+            // Putting capture moves at the front of the list so they are considered first in search.
+            // This can improve alpha-beta search efficiency.
+            moves.emplace(moves.begin(), from, cap_sq, 1); // N
+            moves.emplace(moves.begin(), from, cap_sq, 2); // B
+            moves.emplace(moves.begin(), from, cap_sq, 3); // R
+            moves.emplace(moves.begin(), from, cap_sq, 4); // Q
           } else {
-            moves.emplace_back(from, cap_sq, 0);
+            moves.emplace(moves.begin(), from, cap_sq, 0);
           }
         }
       }
@@ -105,14 +107,14 @@ void MoveGenerator::add_pawn_moves(std::vector<Move> &moves) {
       if (from + delta == ep_sq) {
         int f1 = from % 8, f2 = ep_sq % 8;
         if (std::abs(f1 - f2) == 1) {
-          moves.emplace_back(from, ep_sq, 0);
+          moves.emplace(moves.begin(), from, ep_sq, 0); 
         }
       }
       delta = (us == WHITE) ? 9 : -9;
       if (from + delta == ep_sq) {
         int f1 = from % 8, f2 = ep_sq % 8;
         if (std::abs(f1 - f2) == 1) {
-          moves.emplace_back(from, ep_sq, 0);
+          moves.emplace(moves.begin(), from, ep_sq, 0);
         }
       }
     }
@@ -133,7 +135,12 @@ void MoveGenerator::add_knight_moves(std::vector<Move> &moves) {
     while (targets) {
       int to = __builtin_ctzll(targets);
       targets &= targets - 1;
-      moves.emplace_back(from, to, 0);
+      // Place capture moves at the front of the moves list
+      if (is_capture(from, to)) {
+        moves.emplace(moves.begin(), from, to, 0);
+      } else {
+        moves.emplace_back(from, to, 0);
+      }
     }
   }
 }
@@ -178,7 +185,11 @@ void MoveGenerator::add_king_moves(std::vector<Move> &moves) {
   while (targets) {
     int to = __builtin_ctzll(targets);
     targets &= targets - 1;
-    moves.emplace_back(from, to, 0);
+    if (is_capture(from, to)) {
+      moves.emplace(moves.begin(), from, to, 0);
+    } else {
+      moves.emplace_back(from, to, 0);
+    }
   }
 }
 
@@ -227,8 +238,11 @@ void MoveGenerator::add_sliding_moves(std::vector<Move> &moves, U64 pieces, cons
         int to = nr * 8 + nf;
 
         if (us_occ & (1ULL << to)) break; // blocked by own piece
-        moves.emplace_back(from, to, 0);
-        if (them_occ & (1ULL << to)) break; // capture
+        if (them_occ & (1ULL << to)) {
+          moves.emplace(moves.begin(), from, to, 0); // capture move at front
+          break;
+        }
+        moves.emplace_back(from, to, 0); // otherwise nothing blocking, emplace at back and continue sliding
       }
     }
   }

@@ -6,18 +6,21 @@
 
 namespace chess {
 
-// Minimax search engine with alpha-beta pruning
-class ChoppedfishEngine : public Engine {
+// Experimental engine - baseline copy of ChoppedfishEngine for benchmarking
+// This is used to test improvements by comparing against a known baseline
+class ExperimentalEngine : public Engine {
 public:
-    explicit ChoppedfishEngine(int max_depth = 4);
+    ExperimentalEngine() = default;
     
+    // Get best move at the specified depth with optional time constraint
+    // depth: search depth (default 1)
+    // movetime_ms: time constraint in milliseconds (0 = no time limit, search until depth is reached)
     MoveEvaluation get_best_move(const Position& position, int depth = 1, long long movetime_ms = 0) override;
+    
     int evaluate(Position& position) override;
-    std::string name() const override { return "ChoppedfishEngine"; }
+    std::string name() const override { return "ExperimentalEngine"; }
 
 private:
-    int max_depth_;
-    
     // Negamax with alpha-beta pruning
     // Returns the best score from the current player's perspective
     // Always maximizes; perspective is handled by negating recursive calls

@@ -123,6 +123,16 @@ bool is_draw_by_50_move_rule(const Position &pos) {
   return pos.halfmove_clock() >= 100; // 50 moves = 100 halfmoves
 }
 
+bool is_threefold_repetition(const std::unordered_map<uint64_t, int>& position_history) {
+  // Check if any position has occurred 3 or more times
+  for (const auto& [hash, count] : position_history) {
+    if (count >= 3) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool is_castling_legal(const Position &pos, int from, int to) {
   Color us = pos.side_to_move();
   
@@ -203,7 +213,7 @@ PerftStats perft(Position &pos, int depth) {
       continue;
     }
 
-    // Only count stats at leaf nodes (when depth == 1, recurse goes to depth 0)
+    // Count stats at leaf nodes (when depth == 1, recurse goes to depth 0)
     if (depth == 1) {
       if (undo_info->captured_piece != NO_PIECE || undo_info->was_ep_capture) {
         stats.captures++;
@@ -299,6 +309,7 @@ void perft_by_move(Position &pos, int depth) {
 }
 
 std::vector<Move> get_legal_moves(Position &pos) {
+  
   std::vector<Move> legal_moves;
   MoveGenerator movegen(pos);
   
