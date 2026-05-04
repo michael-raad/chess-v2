@@ -1,5 +1,6 @@
 #include "uci_client.hpp"
 #include "config.hpp"
+#include "move_notation.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -41,13 +42,13 @@ bool UIClient::initialize() {
     int from_engine[2];    // engine writes, parent reads
     
     if (pipe(to_engine) == -1 || pipe(from_engine) == -1) {
-        std::cerr << "ERROR: Failed to create pipes" << std::endl;
+        std::cerr << "[UCI Client] ERROR: Failed to create pipes" << std::endl;
         return false;
     }
     
     pid_t pid = fork();
     if (pid == -1) {
-        std::cerr << "ERROR: Failed to fork" << std::endl;
+        std::cerr << "[UCI Client] ERROR: Failed to fork" << std::endl;
         close(to_engine[0]);
         close(to_engine[1]);
         close(from_engine[0]);
@@ -72,7 +73,7 @@ bool UIClient::initialize() {
         execlp(engine_path_.c_str(), engine_path_.c_str(), nullptr);
         
         // If we get here, exec failed
-        std::cerr << "Failed to exec: " << engine_path_ << std::endl;
+        std::cerr << "[UCI Client] Failed to exec: " << engine_path_ << std::endl;
         exit(1);
     } else {
         // Parent process
@@ -85,7 +86,7 @@ bool UIClient::initialize() {
         FILE* read_pipe = fdopen(from_engine[0], "r");
         
         if (!read_pipe) {
-            std::cerr << "ERROR: Failed to create read FILE*" << std::endl;
+            std::cerr << "[UCI Client] ERROR: Failed to create read FILE*" << std::endl;
             close(engine_write_fd_);
             return false;
         }
@@ -110,7 +111,7 @@ bool UIClient::initialize() {
     }
     
     if (!got_uciok) {
-        std::cerr << "Engine did not respond with uciok" << std::endl;
+        std::cerr << "[UCI Client] Engine did not respond with uciok" << std::endl;
         close(engine_write_fd_);
         fclose(engine_pipe_);
         engine_pipe_ = nullptr;
@@ -149,7 +150,7 @@ void UIClient::set_position(const std::optional<std::string>& fen,
 
 std::optional<MoveEvaluation> UIClient::get_best_move(int depth, long long movetime_ms) {
     if (!is_alive_) {
-        std::cerr << "ERROR: Engine is not alive" << std::endl;
+        std::cerr << "[UCI Client] ERROR: Engine is not alive" << std::endl;
         return std::nullopt;
     }
     
@@ -176,7 +177,7 @@ std::optional<MoveEvaluation> UIClient::get_best_move(int depth, long long movet
     for (int i = 0; i < max_reads; i++) {
         auto line = read_line();
         if (!line) {
-            std::cerr << "ERROR: Engine closed pipe during search" << std::endl;
+            std::cerr << "[UCI Client] ERROR: Engine closed pipe during search" << std::endl;
             break;
         }
         
@@ -188,9 +189,9 @@ std::optional<MoveEvaluation> UIClient::get_best_move(int depth, long long movet
         if (line->find("bestmove") == 0) {
             result = parse_bestmove(*line);
             if (result) {
-                std::cerr << "DEBUG: Got bestmove " << result->move.from << "->" << result->move.to << std::endl;
+                std::cerr << "[UCI Client]: Got bestmove " << format_move_for_log(result->move) << std::endl;
             } else {
-                std::cerr << "ERROR: Failed to parse bestmove: " << *line << std::endl;
+                std::cerr << "[UCI Client]: ERROR: Failed to parse bestmove: " << *line << std::endl;
             }
             break;
         }
@@ -229,7 +230,7 @@ void UIClient::send_command(const std::string& cmd) {
     std::string full_cmd = cmd + "\n";
     ssize_t written = write(engine_write_fd_, full_cmd.c_str(), full_cmd.length());
     if (written == -1) {
-        std::cerr << "ERROR: Failed to write to engine" << std::endl;
+        std::cerr << "[UCI Client] ERROR: Failed to write to engine" << std::endl;
     }
 }
 

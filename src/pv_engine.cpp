@@ -1,0 +1,432 @@
+#include "pv_engine.hpp"
+#include "search.hpp"
+#include <limits>
+#include <optional>
+#include <random>
+#include <vector>
+#include <chrono>
+#include <iostream>
+#include <algorithm>
+
+namespace chess {
+
+static std::string move_to_uci(const Move& move) {
+    std::string out;
+    out += static_cast<char>('a' + (move.from % 8));
+    out += static_cast<char>('1' + (move.from / 8));
+    out += static_cast<char>('a' + (move.to % 8));
+    out += static_cast<char>('1' + (move.to / 8));
+    if (move.promo != 0) {
+        switch (move.promo) {
+            case 1: out += 'n'; break;
+            case 2: out += 'b'; break;
+            case 3: out += 'r'; break;
+            case 4: out += 'q'; break;
+            default: break;
+        }
+    }
+    return out;
+}
+
+bool PVEngine::should_stop_search() {
+    if (stop_flag_ && stop_flag_->load()) {
+        timed_out_ = true;
+        return true;
+    }
+
+    if (!use_time_limit_) {
+        return false;
+    }
+
+    ++node_counter_;
+    // Amortize clock reads to avoid heavy overhead.
+    if ((node_counter_ & 1023ULL) != 0) {
+        return false;
+    }
+
+    if (std::chrono::steady_clock::now() >= deadline_) {
+        timed_out_ = true;
+        return true;
+    }
+
+    return false;
+}
+
+MoveEvaluation PVEngine::get_best_move(const Position& position, int depth, long long movetime_ms) {
+    int max_depth = std::max(1, depth);
+
+    use_time_limit_ = movetime_ms > 0;
+    timed_out_ = false;
+    node_counter_ = 0;
+    if (use_time_limit_) {
+        deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(movetime_ms);
+    }
+
+    Position root_copy = position;  // Copy for move legality checking
+    auto legal_moves = chess::get_legal_moves(root_copy);
+    if (legal_moves.empty()) {
+        return MoveEvaluation{Move{0, 0, 0}, 0};
+    }
+
+    // Keep last fully completed depth result as the return value.
+    MoveEvaluation best_completed{legal_moves[0], 0};
+    int reached_depth = 0;
+    bool have_pv_move = false;
+    Move pv_move;
+
+    // Iterative deepening is engine-owned.
+    for (int d = 1; d <= max_depth; ++d) {
+        if (should_stop_search()) {
+            break;
+        }
+
+        std::vector<Move> best_moves;
+        int best_score = std::numeric_limits<int>::min();
+        int alpha = std::numeric_limits<int>::min();
+        int beta = std::numeric_limits<int>::max();
+
+        std::vector<Move> root_moves = legal_moves;
+        if (have_pv_move) {
+            auto pv_it = std::find(root_moves.begin(), root_moves.end(), pv_move);
+            if (pv_it != root_moves.end()) {
+                std::iter_swap(root_moves.begin(), pv_it);
+            }
+        }
+
+        Position pos_copy = position;
+        auto search_history = position_history_;
+        search_history[get_position_hash(pos_copy)]++;
+
+        bool completed_depth = true;
+        for (const Move& move : root_moves) {
+            if (should_stop_search()) {
+                completed_depth = false;
+                break;
+            }
+
+            auto undo_info = pos_copy.apply_move(move.from, move.to, move.promo);
+            if (!undo_info) continue;
+
+            auto child_history = search_history;
+            child_history[get_position_hash(pos_copy)]++;
+
+            int opponent_score = alphabeta(pos_copy, d - 1, alpha, beta, child_history);
+            int score = -opponent_score;
+
+            pos_copy.undo_move(undo_info.value());
+
+            if (timed_out_) {
+                completed_depth = false;
+                break;
+            }
+
+            if (score > best_score) {
+                best_score = score;
+                best_moves.clear();
+                best_moves.push_back(move);
+            } else if (score == best_score && !best_moves.empty()) {
+                best_moves.push_back(move);
+            }
+
+            alpha = std::max(alpha, score);
+            if (alpha >= beta) {
+                break;
+            }
+        }
+
+        if (!completed_depth || best_moves.empty()) {
+            break;
+        }
+
+        // Keep deterministic PV move for next depth ordering.
+        best_completed = MoveEvaluation{best_moves.front(), best_score};
+        pv_move = best_completed.move;
+        have_pv_move = true;
+        reached_depth = d;
+    }
+
+    std::cerr << "[" << name() << "] Reached depth " << reached_depth
+              << ", returning move " << move_to_uci(best_completed.move) 
+              << " with score " << best_completed.score << std::endl;
+
+    return best_completed;
+}
+
+// Helper function to determine if position is in endgame
+// Endgame if: both sides have no queen, OR every side with a queen has only pawns + max 1 other minor piece
+static bool is_endgame_position(const Position& position) {
+    int white_queens = __builtin_popcountll(position.bitboard(WQ));
+    int black_queens = __builtin_popcountll(position.bitboard(BQ));
+    
+    // If both sides have no queens, it's endgame
+    if (white_queens == 0 && black_queens == 0) {
+        return true;
+    }
+    
+    // Check white side with queen
+    if (white_queens > 0) {
+        int white_non_pawn_minors = 0;
+        white_non_pawn_minors += __builtin_popcountll(position.bitboard(WN));
+        white_non_pawn_minors += __builtin_popcountll(position.bitboard(WB));
+        white_non_pawn_minors += __builtin_popcountll(position.bitboard(WR));
+        // If white has queen but more than 1 non-pawn piece, not endgame
+        if (white_non_pawn_minors > 1) {
+            return false;
+        }
+    }
+    
+    // Check black side with queen
+    if (black_queens > 0) {
+        int black_non_pawn_minors = 0;
+        black_non_pawn_minors += __builtin_popcountll(position.bitboard(BN));
+        black_non_pawn_minors += __builtin_popcountll(position.bitboard(BB));
+        black_non_pawn_minors += __builtin_popcountll(position.bitboard(BR));
+        // If black has queen but more than 1 non-pawn piece, not endgame
+        if (black_non_pawn_minors > 1) {
+            return false;
+        }
+    }
+    
+    // If we reach here: all sides with a queen have at most 1 non-pawn piece, so it's endgame
+    return true;
+}
+
+int PVEngine::evaluate(Position& position) {
+    // Piece value constants
+    constexpr int PAWN_VALUE = 100;
+    constexpr int KNIGHT_VALUE = 320;
+    constexpr int BISHOP_VALUE = 330;
+    constexpr int ROOK_VALUE = 500;
+    constexpr int QUEEN_VALUE = 900;
+    
+    // Piece-Square Tables (from eval.hpp)
+    constexpr int pawn_table[64] = {
+        0,  0,  0,  0,  0,  0,  0,  0,
+        50, 50, 50, 50, 50, 50, 50, 50,
+        10, 10, 20, 30, 30, 20, 10, 10,
+        5,  5, 10, 25, 25, 10,  5,  5,
+        0,  0,  0, 20, 20,  0,  0,  0,
+        5, -5,-10,  0,  0,-10, -5,  5,
+        5, 10, 10,-20,-20, 10, 10,  5,
+        0,  0,  0,  0,  0,  0,  0,  0
+    };
+
+    constexpr int knight_table[64] = {
+        -50,-40,-30,-30,-30,-30,-40,-50,
+        -40,-20,  0,  0,  0,  0,-20,-40,
+        -30,  0, 10, 15, 15, 10,  0,-30,
+        -30,  5, 15, 20, 20, 15,  5,-30,
+        -30,  0, 15, 20, 20, 15,  0,-30,
+        -30,  5, 10, 15, 15, 10,  5,-30,
+        -40,-20,  0,  5,  5,  0,-20,-40,
+        -50,-40,-30,-30,-30,-30,-40,-50,
+    };
+
+    constexpr int bishop_table[64] = {
+        -20,-10,-10,-10,-10,-10,-10,-20,
+        -10,  0,  0,  0,  0,  0,  0,-10,
+        -10,  0,  5, 10, 10,  5,  0,-10,
+        -10,  5,  5, 10, 10,  5,  5,-10,
+        -10,  0, 10, 10, 10, 10,  0,-10,
+        -10, 10, 10, 10, 10, 10, 10,-10,
+        -10,  5,  0,  0,  0,  0,  5,-10,
+        -20,-10,-10,-10,-10,-10,-10,-20,
+    };
+
+    constexpr int rook_table[64] = {
+        0,  0,  0,  0,  0,  0,  0,  0,
+        5, 10, 10, 10, 10, 10, 10,  5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        0,  0,  0,  5,  5,  0,  0,  0
+    };
+
+    constexpr int queen_table[64] = {
+        -20,-10,-10, -5, -5,-10,-10,-20,
+        -10,  0,  0,  0,  0,  0,  0,-10,
+        -10,  0,  5,  5,  5,  5,  0,-10,
+        -5,  0,  5,  5,  5,  5,  0, -5,
+        0,  0,  5,  5,  5,  5,  0, -5,
+        -10,  5,  5,  5,  5,  5,  0,-10,
+        -10,  0,  5,  0,  0,  0,  0,-10,
+        -20,-10,-10, -5, -5,-10,-10,-20
+    };
+
+    constexpr int king_table_mg[64] = {
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -20,-30,-30,-40,-40,-30,-30,-20,
+        -10,-20,-20,-20,-20,-20,-20,-10,
+        20, 20,  0,  0,  0,  0, 20, 20,
+        20, 30, 10,  0,  0, 10, 30, 20
+    };
+
+    constexpr int king_table_eg[64] = {
+        -50,-40,-30,-20,-20,-30,-40,-50,
+        -30,-20,-10,  0,  0,-10,-20,-30,
+        -30,-10, 20, 30, 30, 20,-10,-30,
+        -30,-10, 30, 40, 40, 30,-10,-30,
+        -30,-10, 30, 40, 40, 30,-10,-30,
+        -30,-10, 20, 30, 30, 20,-10,-30,
+        -30,-30,  0, 10, 10,  0,-30,-30,
+        -50,-30,-30,-30,-30,-30,-30,-50
+    };
+    
+    Color side_to_move = position.side_to_move();
+    
+    // Check for terminal positions
+    if (is_checkmate(position, side_to_move)) {
+        return std::numeric_limits<int>::min() + 1;
+    }
+    
+    if (is_stalemate(position, side_to_move)) {
+        return 0;
+    }
+
+    if (position.halfmove_clock() >= 100) {
+        return 0;
+    }
+    
+    int score = 0;
+    
+    const int piece_values[] = {
+        PAWN_VALUE,   KNIGHT_VALUE, BISHOP_VALUE, ROOK_VALUE, QUEEN_VALUE, 20000,
+        PAWN_VALUE,   KNIGHT_VALUE, BISHOP_VALUE, ROOK_VALUE, QUEEN_VALUE, 20000
+    };
+    
+    bool endgame = is_endgame_position(position);
+    
+    // Sum material and positional scores for all pieces
+    for (int piece = 0; piece < 12; piece++) {
+        U64 bb = position.bitboard(static_cast<Piece>(piece));
+        if (bb == 0) continue;
+        
+        // Material value
+        if (piece != WK && piece != BK) {
+            int piece_count = __builtin_popcountll(bb);
+            int piece_value = piece_values[piece];
+            
+            if (piece < 6) {
+                score += piece_count * piece_value;
+            } else {
+                score -= piece_count * piece_value;
+            }
+        }
+        
+        // Positional bonus from piece-square tables
+        while (bb) {
+            int square = __builtin_ctzll(bb);
+            bb &= bb - 1;
+            
+            int mirrored = (7 - square / 8) * 8 + (square % 8);
+            int table_score = 0;
+            
+            if (piece < 6) {  // White pieces
+                switch (piece) {
+                    case WP: table_score = pawn_table[mirrored]; break;
+                    case WN: table_score = knight_table[mirrored]; break;
+                    case WB: table_score = bishop_table[mirrored]; break;
+                    case WR: table_score = rook_table[mirrored]; break;
+                    case WQ: table_score = queen_table[mirrored]; break;
+                    case WK: table_score = endgame ? king_table_eg[mirrored] : king_table_mg[mirrored]; break;
+                }
+                score += table_score;
+            } else {  // Black pieces
+                switch (piece) {
+                    case BP: table_score = pawn_table[square]; break;
+                    case BN: table_score = knight_table[square]; break;
+                    case BB: table_score = bishop_table[square]; break;
+                    case BR: table_score = rook_table[square]; break;
+                    case BQ: table_score = queen_table[square]; break;
+                    case BK: table_score = endgame ? king_table_eg[square] : king_table_mg[square]; break;
+                }
+                score -= table_score;
+            }
+        }
+    }
+    
+    if (side_to_move == BLACK) {
+        score = -score;
+    }
+    
+    return score;
+}
+
+int PVEngine::alphabeta(Position& position, int depth, int alpha, int beta,
+                        std::unordered_map<uint64_t, int> position_history) {
+    if (should_stop_search()) {
+        return this->evaluate(position);
+    }
+
+    // Check threefold repetition at THIS depth in the search tree
+    // Threefold repetition is automatic - game ends as a draw immediately
+    if (!position_history.empty()) {
+        uint64_t current_hash = get_position_hash(position);
+        auto it = position_history.find(current_hash);
+        if (it != position_history.end() && it->second >= 3) {
+            return 0;  // Threefold repetition: automatic draw
+        }
+    }
+    
+    // Check 50-move rule - can result in checkmate or draw
+    if (position.halfmove_clock() >= 100) {
+        return this->evaluate(position);
+    }
+    
+    auto legal_moves = chess::get_legal_moves(position);
+    
+    // Terminal node (checkmate or stalemate) or depth limit
+    // Let evaluate() handle checkmate, stalemate, and 50-move rule
+    if (legal_moves.empty()) {
+        return this->evaluate(position);
+    }
+    
+    if (depth == 0) {
+        return this->evaluate(position);
+    }
+    
+    // Negamax always maximizes from current player's perspective
+    // Recursive calls are negated because they return opponent's perspective
+    int max_eval = std::numeric_limits<int>::min();
+    
+    for (const Move& move : legal_moves) {
+        if (should_stop_search()) {
+            break;
+        }
+
+        auto undo_info = position.apply_move(move.from, move.to, move.promo);
+        if (!undo_info) continue;
+        
+        // Track this position in the search history
+        auto child_history = position_history;
+        child_history[get_position_hash(position)]++;
+        
+        // Negamax with alpha-beta: negate window for opponent's perspective
+        // Safely handle extreme bounds to avoid integer overflow
+        int neg_alpha = (beta == std::numeric_limits<int>::max()) ? std::numeric_limits<int>::min() : -beta;
+        int neg_beta = (alpha == std::numeric_limits<int>::min()) ? std::numeric_limits<int>::max() : -alpha;
+        
+        int eval = -alphabeta(position, depth - 1, neg_alpha, neg_beta, child_history);
+        position.undo_move(undo_info.value());
+
+        if (timed_out_) {
+            break;
+        }
+        
+        max_eval = std::max(max_eval, eval);
+        alpha = std::max(alpha, eval);
+        
+        if (beta <= alpha) {
+            break; // Beta cutoff
+        }
+    }
+    
+    return max_eval;
+}
+
+}

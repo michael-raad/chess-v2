@@ -1,11 +1,15 @@
 #include "uci.hpp"
 #include "config.hpp"
-#include "experimental_engine.hpp"
-#include "choppedfish_engine.hpp"
+#include "position_engine.hpp"
+#include "pv_engine.hpp"
+#include "material_engine.hpp"
+#include "move_notation.hpp"
 #include <iostream>
 #include <sstream>
 #include <chrono>
 #include <vector>
+#include <algorithm>
+#include <cctype>
 
 namespace chess {
 
@@ -13,19 +17,23 @@ UCI::UCI()
     : game_(std::make_unique<Game>(PlayerType::AI, PlayerType::AI)),
 #ifdef UCI_ENGINE_TYPE
 #if UCI_ENGINE_TYPE == 1
-      uci_engine_(std::make_unique<ExperimentalEngine>()),
+    uci_engine_(std::make_unique<PositionEngine>()),
 #elif UCI_ENGINE_TYPE == 2
-      uci_engine_(std::make_unique<ChoppedfishEngine>(4)),
+    uci_engine_(std::make_unique<MaterialEngine>()),
+#elif UCI_ENGINE_TYPE == 3
+    uci_engine_(std::make_unique<PVEngine>()),
 #else
-      uci_engine_(std::make_unique<ExperimentalEngine>()),  // Default to experimental
+    uci_engine_(std::make_unique<PositionEngine>()),  // Default to position engine
 #endif
 #else
-      uci_engine_(std::make_unique<ExperimentalEngine>()),  // Default to experimental
+    uci_engine_(std::make_unique<PositionEngine>()),  // Default to position engine
 #endif
       stop_search_(false),
       search_depth_(20),
       search_movetime_(0),
-      ponder_(false) {
+    ponder_(false),
+    hash_mb_(32),
+    threads_(1) {
 }
 
 void UCI::run() {
@@ -44,6 +52,8 @@ void UCI::run() {
             handle_uci();
         } else if (cmd == "isready") {
             handle_isready();
+        } else if (cmd == "ucinewgame") {
+            handle_ucinewgame();
         } else if (cmd == "position") {
             handle_position(line);
         } else if (cmd == "go") {
@@ -62,13 +72,24 @@ void UCI::run() {
 void UCI::handle_uci() {
     std::cout << "id name " << uci_engine_->name() << std::endl;
     std::cout << "id author Michael" << std::endl;
-    // Optional: add options here
-    // std::cout << "option name Hash type spin default 32 min 1 max 1024" << std::endl;
+    std::cout << "option name Hash type spin default 32 min 1 max 4096" << std::endl;
+    std::cout << "option name Threads type spin default 1 min 1 max 128" << std::endl;
     std::cout << "uciok" << std::endl;
 }
 
 void UCI::handle_isready() {
     std::cout << "readyok" << std::endl;
+}
+
+void UCI::handle_ucinewgame() {
+    // Stop any in-flight search and reset per-game state.
+    stop_search_ = true;
+    if (search_thread_.joinable()) {
+        search_thread_.join();
+    }
+
+    game_ = std::make_unique<Game>(PlayerType::AI, PlayerType::AI);
+    stop_search_ = false;
 }
 
 void UCI::handle_position(const std::string& line) {
@@ -97,7 +118,8 @@ void UCI::handle_position(const std::string& line) {
         while (iss >> move_str) {
             auto move = uci_to_move(move_str);
             if (move) {
-                game_->try_move(move->from, move->to, move->promo);
+                // UCI must apply moves regardless of player type.
+                game_->apply_move(move->from, move->to, move->promo);
             }
         }
     }
@@ -112,6 +134,13 @@ void UCI::handle_go(const std::string& line) {
     search_depth_ = 20;
     search_movetime_ = 0;
     ponder_ = false;
+
+    long long wtime = -1;
+    long long btime = -1;
+    long long winc = 0;
+    long long binc = 0;
+    int movestogo = 0;
+    bool infinite = false;
     
     // Parse go parameters
     std::string param;
@@ -121,18 +150,26 @@ void UCI::handle_go(const std::string& line) {
         } else if (param == "movetime") {
             iss >> search_movetime_;
         } else if (param == "wtime") {
-            long long wtime;
             iss >> wtime;
-            // Could implement time management here
         } else if (param == "btime") {
-            long long btime;
             iss >> btime;
-            // Could implement time management here
+        } else if (param == "winc") {
+            iss >> winc;
+        } else if (param == "binc") {
+            iss >> binc;
+        } else if (param == "movestogo") {
+            iss >> movestogo;
         } else if (param == "infinite") {
+            infinite = true;
             search_depth_ = 100;  // Very deep
         } else if (param == "ponder") {
             ponder_ = true;
         }
+    }
+
+    // If movetime wasn't provided, derive a practical per-move budget from clock time.
+    if (!infinite && search_movetime_ <= 0 && (wtime >= 0 || btime >= 0)) {
+        search_movetime_ = compute_time_budget_ms(wtime, btime, winc, binc, movestogo);
     }
     
     // Stop any existing search
@@ -160,10 +197,74 @@ void UCI::handle_quit() {
     }
 }
 
-void UCI::handle_setoption(const std::string& /* line */) {
-    // Parse: setoption name <name> value <value>
-    // For now, we'll just acknowledge it
-    // Could implement hash size, etc. here
+void UCI::handle_setoption(const std::string& line) {
+    std::istringstream iss(line);
+    std::string token;
+    iss >> token; // setoption
+
+    std::string name;
+    std::string value;
+
+    while (iss >> token) {
+        if (token == "name") {
+            name.clear();
+            while (iss >> token && token != "value") {
+                if (!name.empty()) name += " ";
+                name += token;
+            }
+            if (token != "value") {
+                value.clear();
+                break;
+            }
+            std::getline(iss, value);
+            if (!value.empty() && value.front() == ' ') {
+                value.erase(value.begin());
+            }
+            break;
+        }
+    }
+
+    std::string name_lower = name;
+    std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    if (name_lower == "hash") {
+        try {
+            int parsed = std::stoi(value);
+            hash_mb_ = std::max(1, std::min(parsed, 4096));
+        } catch (...) {
+            // Ignore malformed value, keep previous setting.
+        }
+    } else if (name_lower == "threads") {
+        try {
+            int parsed = std::stoi(value);
+            threads_ = std::max(1, std::min(parsed, 128));
+        } catch (...) {
+            // Ignore malformed value, keep previous setting.
+        }
+    }
+}
+
+long long UCI::compute_time_budget_ms(long long wtime, long long btime,
+                                      long long winc, long long binc,
+                                      int movestogo) const {
+    const Color stm = game_->get_position().side_to_move();
+    long long remain = (stm == WHITE) ? wtime : btime;
+    long long inc = (stm == WHITE) ? winc : binc;
+
+    if (remain < 0) {
+        return 0;
+    }
+
+    // Conservative heuristic: divide time by remaining moves and add most of increment.
+    int moves = movestogo > 0 ? movestogo : 30;
+    long long alloc = remain / std::max(1, moves);
+    alloc += (inc * 8) / 10;
+
+    // Keep a small safety buffer and clamp to sane bounds.
+    alloc = std::max(1LL, alloc - 20);
+    alloc = std::min(alloc, std::max(1LL, remain - 10));
+    return alloc;
 }
 
 std::string UCI::square_to_uci(int from, int to, int promo) const {
@@ -225,52 +326,19 @@ std::optional<Move> UCI::uci_to_move(const std::string& uci_move) const {
 }
 
 void UCI::search_thread(int depth, long long movetime_ms) {
-    auto start_time = std::chrono::high_resolution_clock::now();
-    
-    // Set up search parameters for the engine (empty history for now)
-    std::unordered_map<uint64_t, int> history;
-    uci_engine_->set_position_history(history);
+    // Provide real game repetition history so the engine can detect imminent draws.
+    uci_engine_->set_position_history(game_->get_position_history());
+    uci_engine_->set_stop_flag(&stop_search_);
     
     std::cerr << "[UCI] Starting search at depth " << depth << " with time " << movetime_ms << " ms" << std::endl;
-    
-    // Perform search with iterative deepening
-    MoveEvaluation best_eval{Move(0, 0, 0), 0};
-    
-    for (int d = 1; d <= depth; d++) {
-        // Check time limit if specified
-        if (movetime_ms > 0) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::high_resolution_clock::now() - start_time).count();
-            if (elapsed >= movetime_ms) {
-                std::cerr << "[UCI] Time limit reached at depth " << d << std::endl;
-                break;
-            }
-        }
-        
-        std::cerr << "[UCI] Searching depth " << d << std::endl;
-        
-        // Get evaluation at this depth - pass depth and remaining time to the engine
-        long long remaining_time = movetime_ms > 0 ? movetime_ms - std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::high_resolution_clock::now() - start_time).count() : 0;
-        
-        MoveEvaluation eval = uci_engine_->get_best_move(game_->get_position(), d, remaining_time);
-        
-        std::cerr << "[UCI] Got move: " << eval.move.from << "->" << eval.move.to << " score: " << eval.score << std::endl;
-        
-        best_eval = eval;
-        
-        // Send info to GUI (flush after each line)
-        std::cout << "info depth " << d << " score cp " << eval.score << std::endl;
-        std::cout.flush();
-        
-        // Check stop flag after each depth (allows stopping between depths)
-        if (stop_search_) {
-            std::cerr << "[UCI] Search stopped at depth " << d << std::endl;
-            break;
-        }
-    }
-    
-    std::cerr << "[UCI] Returning bestmove: " << best_eval.move.from << "->" << best_eval.move.to << std::endl;
+
+    MoveEvaluation best_eval = uci_engine_->get_best_move(game_->get_position(), depth, movetime_ms);
+    std::cerr << "[UCI] Returning bestmove: " << format_move_for_log(best_eval.move) << std::endl;
+
+    // Send one info line for compatibility/logging.
+    std::cout << "info depth " << depth << " score cp " << best_eval.score << std::endl;
+    std::cout.flush();
+
     // Send best move
     std::cout << "bestmove " << square_to_uci(best_eval.move.from, best_eval.move.to, best_eval.move.promo);
     std::cout << std::endl;

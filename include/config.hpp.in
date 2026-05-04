@@ -7,6 +7,6 @@ namespace chess {
     static const std::string IMAGES_DIR = "@PROJECT_SOURCE_DIR@/images/";
     
     // Paths to engine binaries (configured at build time)
-    static const std::string WHITE_ENGINE_BIN_PATH = "@CMAKE_BINARY_DIR@/bin/chess_uci_white";
-    static const std::string BLACK_ENGINE_BIN_PATH = "@CMAKE_BINARY_DIR@/bin/chess_uci_black";
+    static const std::string WHITE_ENGINE_BIN_PATH = "@CMAKE_BINARY_DIR@/bin/stockfish";
+    static const std::string BLACK_ENGINE_BIN_PATH = "@CMAKE_BINARY_DIR@/bin/chess_uci_PV";
 }

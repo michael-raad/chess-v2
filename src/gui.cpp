@@ -1,5 +1,6 @@
 #include "gui.hpp"
 #include "config.hpp"
+#include "move_notation.hpp"
 #include <iostream>
 #include <algorithm>
 
@@ -17,10 +18,10 @@ GUI::GUI(PlayerType white_player, PlayerType black_player)
       selected_player_black_(black_player == PlayerType::HUMAN ? 0 : 1)
 {
     if (!font_.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
-        std::cerr << "ERROR: Failed to load font\n";
+        std::cerr << "[GUI] ERROR: Failed to load font\n";
     }
     if (!load_piece_textures()) {
-        std::cerr << "ERROR: Failed to load piece textures\n";
+        std::cerr << "[GUI] ERROR: Failed to load piece textures\n";
     }
     
     // Initialize UCI engine connections
@@ -28,9 +29,9 @@ GUI::GUI(PlayerType white_player, PlayerType black_player)
     bool black_ok = black_engine_->initialize();
     
     if (!white_ok || !black_ok) {
-        std::cerr << "ERROR: Failed to initialize one or both UCI engines\n";
-        if (!white_ok) std::cerr << "  White engine failed\n";
-        if (!black_ok) std::cerr << "  Black engine failed\n";
+        std::cerr << "[GUI] ERROR: Failed to initialize one or both UCI engines\n";
+        if (!white_ok) std::cerr << "[GUI]  White engine failed\n";
+        if (!black_ok) std::cerr << "[GUI]  Black engine failed\n";
         // Continue anyway - will fall back to embedded engines if needed
     }
 }
@@ -74,27 +75,27 @@ void GUI::run() {
                 // Use UIClient to get best move from engine
                 if (current_engine && current_engine->is_alive()) {
                     Color side = game_->get_position().side_to_move();
-                    std::cerr << "DEBUG: Requesting move from " << (side == Color::WHITE ? "white" : "black") << " engine..." << std::endl;
+                    std::cerr << "[GUI] Requesting move from " << (side == Color::WHITE ? "white" : "black") << " engine..." << std::endl;
                     
                     // Send position to engine (FEN + empty move list)
                     current_engine->set_position(game_->get_position().get_fen());
                     
                     // Get best move from engine
-                    auto best_move_eval = current_engine->get_best_move(4);  // depth 4 for responsive GUI
+                    auto best_move_eval = current_engine->get_best_move(0, 4000); // Up to depth d, stops at s seconds
                     
                     if (best_move_eval) {
-                        std::cerr << "DEBUG: Engine returned move " << best_move_eval->move.from << "->" << best_move_eval->move.to << std::endl;
+                        std::cerr << "[GUI] Engine returned move " << format_move_for_log(best_move_eval->move) << std::endl;
                         
                         // Apply the move
                         bool moved = game_->apply_move(best_move_eval->move.from, best_move_eval->move.to, best_move_eval->move.promo);
                         if (!moved) {
-                            std::cerr << "ERROR: Failed to apply move from engine!" << std::endl;
+                            std::cerr << "[GUI] ERROR: Failed to apply move from engine!" << std::endl;
                         }
                     } else {
-                        std::cerr << "ERROR: Engine returned no move" << std::endl;
+                        std::cerr << "[GUI] ERROR: Engine returned no move" << std::endl;
                     }
                 } else {
-                    std::cerr << "ERROR: Engine not alive" << std::endl;
+                    std::cerr << "[GUI] ERROR: Engine not alive" << std::endl;
                 }
                 
                 // Check if game ended after AI move
@@ -393,7 +394,7 @@ void GUI::handle_menu_input(const sf::Event& event) {
             bool black_ok = black_engine_->initialize();
             
             if (!white_ok || !black_ok) {
-                std::cerr << "ERROR: Failed to initialize one or both UCI engines\n";
+                std::cerr << "[GUI] ERROR: Failed to initialize one or both UCI engines\n";
             }
             
             state_ = GUIState::PLAYING;
@@ -468,7 +469,7 @@ bool GUI::load_piece_textures() {
     for (int i = 0; i < 12; ++i) {
         std::string path = IMAGES_DIR + filenames[i];
         if (!piece_textures_[i].loadFromFile(path)) {
-            std::cerr << "ERROR: Failed to load " << path << "\n";
+            std::cerr << "[GUI] ERROR: Failed to load " << path << "\n";
             return false;
         }
     }

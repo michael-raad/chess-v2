@@ -1,13 +1,11 @@
 #include "game.hpp"
-#include "random_engine.hpp"
-#include "choppedfish_engine.hpp"
-#include "experimental_engine.hpp"
+#include "position_engine.hpp"
 #include <random>
 #include <vector>
 
 namespace chess {
 
-Game::Game(PlayerType white_player, PlayerType black_player) : position_(), movegen_(position_), selected_square_(std::nullopt), attack_tables_init_(), status_(GameStatus::PLAYING), evaluation_engine_(std::make_unique<ExperimentalEngine>()) {
+Game::Game(PlayerType white_player, PlayerType black_player) : position_(), movegen_(position_), selected_square_(std::nullopt), attack_tables_init_(), status_(GameStatus::PLAYING), evaluation_engine_(std::make_unique<PositionEngine>()) {
     players_[0] = white_player;
     players_[1] = black_player;
     update_repetition_history();  // Initialize with starting position

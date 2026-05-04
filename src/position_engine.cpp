@@ -1,83 +1,145 @@
-#include "experimental_engine.hpp"
+#include "position_engine.hpp"
 #include "search.hpp"
 #include <limits>
 #include <optional>
 #include <random>
 #include <vector>
 #include <chrono>
+#include <iostream>
 
 namespace chess {
 
-MoveEvaluation ExperimentalEngine::get_best_move(const Position& position, int depth, long long movetime_ms) {
-    // Note: movetime_ms is not currently used in the engine, but provided for future iterative deepening + time management
-    (void)movetime_ms;  // Suppress unused parameter warning
-    Position pos_copy = position;  // Copy for move legality checking
-    auto legal_moves = chess::get_legal_moves(pos_copy);
-    
+static std::string move_to_uci(const Move& move) {
+    std::string out;
+    out += static_cast<char>('a' + (move.from % 8));
+    out += static_cast<char>('1' + (move.from / 8));
+    out += static_cast<char>('a' + (move.to % 8));
+    out += static_cast<char>('1' + (move.to / 8));
+    if (move.promo != 0) {
+        switch (move.promo) {
+            case 1: out += 'n'; break;
+            case 2: out += 'b'; break;
+            case 3: out += 'r'; break;
+            case 4: out += 'q'; break;
+            default: break;
+        }
+    }
+    return out;
+}
+
+bool PositionEngine::should_stop_search() {
+    if (stop_flag_ && stop_flag_->load()) {
+        timed_out_ = true;
+        return true;
+    }
+
+    if (!use_time_limit_) {
+        return false;
+    }
+
+    ++node_counter_;
+    // Amortize clock reads to avoid heavy overhead.
+    if ((node_counter_ & 1023ULL) != 0) {
+        return false;
+    }
+
+    if (std::chrono::steady_clock::now() >= deadline_) {
+        timed_out_ = true;
+        return true;
+    }
+
+    return false;
+}
+
+MoveEvaluation PositionEngine::get_best_move(const Position& position, int depth, long long movetime_ms) {
+    int max_depth = std::max(1, depth);
+
+    use_time_limit_ = movetime_ms > 0;
+    timed_out_ = false;
+    node_counter_ = 0;
+    if (use_time_limit_) {
+        deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(movetime_ms);
+    }
+
+    Position root_copy = position;  // Copy for move legality checking
+    auto legal_moves = chess::get_legal_moves(root_copy);
     if (legal_moves.empty()) {
-        // No legal moves - should not happen in a valid position
         return MoveEvaluation{Move{0, 0, 0}, 0};
     }
-    
-    std::vector<Move> best_moves;  // Store all equally-best moves
-    int best_score = std::numeric_limits<int>::min();
-    
-    int alpha = std::numeric_limits<int>::min();
-    int beta = std::numeric_limits<int>::max();
-    
-    // Initialize search history with game history and current position
-    auto search_history = position_history_;
-    search_history[get_position_hash(pos_copy)]++;
-    
-    // Root level negamax search
-    // Unlike recursive calls, we don't negate alpha/beta at root
-    // Try each legal move and find the one(s) that lead to the best position
-    for (const Move& move : legal_moves) {
-        // Apply the move
-        auto undo_info = pos_copy.apply_move(move.from, move.to, move.promo);
-        if (!undo_info) continue; // Skip invalid moves
-        
-        // Track this position in the search history
-        auto child_history = search_history;
-        child_history[get_position_hash(pos_copy)]++;
-        
-        // After our move, it's opponent's turn
-        // Call alphabeta with normal window and negate result to get our perspective
-        int opponent_score = alphabeta(pos_copy, depth - 1, alpha, beta, child_history);
-        int score = -opponent_score;
-        
-        // Undo the move
-        pos_copy.undo_move(undo_info.value());
-        
-        // Track moves with the best score
-        if (score > best_score) {
-            // Found a better move, clear previous best moves and start over
-            best_score = score;
-            best_moves.clear();
-            best_moves.push_back(move);
-        } else if (score == best_score && !best_moves.empty()) {
-            // Found an equally good move, add it to the list
-            best_moves.push_back(move);
-        }
-        
-        alpha = std::max(alpha, score);
-        
-        // Beta pruning at root
-        if (alpha >= beta) {
+
+    // Keep last fully completed depth result as the return value.
+    MoveEvaluation best_completed{legal_moves[0], 0};
+    int reached_depth = 0;
+
+    // Iterative deepening is engine-owned.
+    for (int d = 1; d <= max_depth; ++d) {
+        if (should_stop_search()) {
             break;
         }
+
+        std::vector<Move> best_moves;
+        int best_score = std::numeric_limits<int>::min();
+        int alpha = std::numeric_limits<int>::min();
+        int beta = std::numeric_limits<int>::max();
+
+        Position pos_copy = position;
+        auto search_history = position_history_;
+        search_history[get_position_hash(pos_copy)]++;
+
+        bool completed_depth = true;
+        for (const Move& move : legal_moves) {
+            if (should_stop_search()) {
+                completed_depth = false;
+                break;
+            }
+
+            auto undo_info = pos_copy.apply_move(move.from, move.to, move.promo);
+            if (!undo_info) continue;
+
+            auto child_history = search_history;
+            child_history[get_position_hash(pos_copy)]++;
+
+            int opponent_score = alphabeta(pos_copy, d - 1, alpha, beta, child_history);
+            int score = -opponent_score;
+
+            pos_copy.undo_move(undo_info.value());
+
+            if (timed_out_) {
+                completed_depth = false;
+                break;
+            }
+
+            if (score > best_score) {
+                best_score = score;
+                best_moves.clear();
+                best_moves.push_back(move);
+            } else if (score == best_score && !best_moves.empty()) {
+                best_moves.push_back(move);
+            }
+
+            alpha = std::max(alpha, score);
+            if (alpha >= beta) {
+                break;
+            }
+        }
+
+        if (!completed_depth || best_moves.empty()) {
+            break;
+        }
+
+        // Choose one of the equally-best moves at random for this completed depth.
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, best_moves.size() - 1);
+        best_completed = MoveEvaluation{best_moves[dis(gen)], best_score};
+        reached_depth = d;
     }
-    
-    // If no moves were added to best_moves (shouldn't happen), return first legal move
-    if (best_moves.empty()) {
-        return MoveEvaluation{legal_moves[0], 0};
-    }
-    
-    // Choose one of the equally-best moves at random
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, best_moves.size() - 1);
-    return MoveEvaluation{best_moves[dis(gen)], best_score};
+
+    std::cerr << "[" << name() << "] Reached depth " << reached_depth
+              << ", returning move " << move_to_uci(best_completed.move) 
+              << " with score " << best_completed.score << std::endl;
+
+    return best_completed;
 }
 
 // Helper function to determine if position is in endgame
@@ -119,7 +181,7 @@ static bool is_endgame_position(const Position& position) {
     return true;
 }
 
-int ExperimentalEngine::evaluate(Position& position) {
+int PositionEngine::evaluate(Position& position) {
     // Piece value constants
     constexpr int PAWN_VALUE = 100;
     constexpr int KNIGHT_VALUE = 320;
@@ -285,8 +347,12 @@ int ExperimentalEngine::evaluate(Position& position) {
     return score;
 }
 
-int ExperimentalEngine::alphabeta(Position& position, int depth, int alpha, int beta,
-                                  std::unordered_map<uint64_t, int> position_history) {
+int PositionEngine::alphabeta(Position& position, int depth, int alpha, int beta,
+                              std::unordered_map<uint64_t, int> position_history) {
+    if (should_stop_search()) {
+        return this->evaluate(position);
+    }
+
     // Check threefold repetition at THIS depth in the search tree
     // Threefold repetition is automatic - game ends as a draw immediately
     if (!position_history.empty()) {
@@ -319,6 +385,10 @@ int ExperimentalEngine::alphabeta(Position& position, int depth, int alpha, int 
     int max_eval = std::numeric_limits<int>::min();
     
     for (const Move& move : legal_moves) {
+        if (should_stop_search()) {
+            break;
+        }
+
         auto undo_info = position.apply_move(move.from, move.to, move.promo);
         if (!undo_info) continue;
         
@@ -333,6 +403,10 @@ int ExperimentalEngine::alphabeta(Position& position, int depth, int alpha, int 
         
         int eval = -alphabeta(position, depth - 1, neg_alpha, neg_beta, child_history);
         position.undo_move(undo_info.value());
+
+        if (timed_out_) {
+            break;
+        }
         
         max_eval = std::max(max_eval, eval);
         alpha = std::max(alpha, eval);

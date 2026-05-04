@@ -3,6 +3,7 @@
 #include <string>
 #include <unordered_map>
 #include <cstdint>
+#include <atomic>
 #include "position.hpp"
 #include "movegen.hpp"
 
@@ -35,9 +36,16 @@ public:
     void set_position_history(const std::unordered_map<uint64_t, int>& history) {
         position_history_ = history;
     }
+
+    // Set external stop flag (owned by caller, e.g. UCI controller).
+    // Engines may poll this during search to stop promptly.
+    void set_stop_flag(const std::atomic<bool>* stop_flag) {
+        stop_flag_ = stop_flag;
+    }
     
 protected:
     std::unordered_map<uint64_t, int> position_history_;
+    const std::atomic<bool>* stop_flag_ = nullptr;
 };
 
 }
