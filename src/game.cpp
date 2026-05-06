@@ -5,7 +5,14 @@
 
 namespace chess {
 
-Game::Game(PlayerType white_player, PlayerType black_player) : position_(), movegen_(position_), selected_square_(std::nullopt), attack_tables_init_(), status_(GameStatus::PLAYING), evaluation_engine_(std::make_unique<PositionEngine>()) {
+Game::Game(PlayerType white_player, PlayerType black_player)
+        : position_(),
+            movegen_(position_),
+            selected_square_(std::nullopt),
+            attack_tables_init_(),
+            status_(GameStatus::PLAYING),
+            evaluation_engine_(std::make_unique<PositionEngine>()),
+            base_fen_("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1") {
     players_[0] = white_player;
     players_[1] = black_player;
     update_repetition_history();  // Initialize with starting position
@@ -18,6 +25,7 @@ bool Game::set_fen(const std::string& fen) {
     if (!position_.set_from_fen(fen)) {
         return false;
     }
+    base_fen_ = fen;
     selected_square_ = std::nullopt;
     last_move_from_ = std::nullopt;
     last_move_to_ = std::nullopt;

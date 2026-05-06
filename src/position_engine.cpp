@@ -268,6 +268,15 @@ int PositionEngine::evaluate(Position& position) {
     };
     
     Color side_to_move = position.side_to_move();
+
+    // Treat threefold repetition as an immediate draw in evaluation.
+    if (!position_history_.empty()) {
+        uint64_t current_hash = get_position_hash(position);
+        auto it = position_history_.find(current_hash);
+        if (it != position_history_.end() && it->second >= 3) {
+            return 0;
+        }
+    }
     
     // Check for terminal positions
     if (is_checkmate(position, side_to_move)) {

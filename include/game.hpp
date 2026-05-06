@@ -44,6 +44,9 @@ public:
     // Get move history in algebraic notation (e.g., "e2e4", "e7e8q")
     const std::vector<std::string>& get_move_history() const { return move_history_; }
 
+    // Get base FEN used to build move history
+    const std::string& get_base_fen() const { return base_fen_; }
+
     // Get repetition history (position hash -> occurrence count)
     const std::unordered_map<uint64_t, int>& get_position_history() const { return position_history_; }
 
@@ -93,6 +96,7 @@ private:
     std::unique_ptr<Engine> evaluation_engine_;  // Engine for board analysis
     std::unordered_map<uint64_t, int> position_history_;  // Hash -> count for threefold repetition
     std::vector<std::string> move_history_;  // Move history in algebraic notation (e.g., "e2e4")
+    std::string base_fen_;
 };
 
 }

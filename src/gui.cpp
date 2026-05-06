@@ -77,11 +77,11 @@ void GUI::run() {
                     Color side = game_->get_position().side_to_move();
                     std::cerr << "[GUI] Requesting move from " << (side == Color::WHITE ? "white" : "black") << " engine..." << std::endl;
                     
-                    // Send position to engine (FEN + empty move list)
-                    current_engine->set_position(game_->get_position().get_fen());
+                    // Send base position plus move history so the engine stays aligned with the game.
+                    current_engine->set_position(game_->get_base_fen(), game_->get_move_history());
                     
                     // Get best move from engine
-                    auto best_move_eval = current_engine->get_best_move(0, 4000); // Up to depth d, stops at s seconds
+                    auto best_move_eval = current_engine->get_best_move(0, 2000); // Up to depth d, stops at s seconds
                     
                     if (best_move_eval) {
                         std::cerr << "[GUI] Engine returned move " << format_move_for_log(best_move_eval->move) << std::endl;
